@@ -27,8 +27,9 @@ const std::string& FanMover::process_gcode(const std::string& gcode, bool flush)
     m_buffer_time_size = 0;
     for (auto& data : m_buffer) m_buffer_time_size += data.time;
 
-    m_parser.parse_buffer(gcode,
-        [this](GCodeReader& reader, const GCodeReader::GCodeLine& line) { /*m_process_output += line.raw() + "\n";*/ this->_process_gcode_line(reader, line); });
+    if(!gcode.empty())
+        m_parser.parse_buffer(gcode,
+            [this](GCodeReader& reader, const GCodeReader::GCodeLine& line) { /*m_process_output += line.raw() + "\n";*/ this->_process_gcode_line(reader, line); });
 
     if (flush) {
         while (!m_buffer.empty()) {
@@ -215,6 +216,7 @@ void FanMover::_remove_slow_fan(int16_t min_speed, float past_sec) {
 void FanMover::_process_gcode_line(GCodeReader& reader, const GCodeReader::GCodeLine& line)
 {
     // processes 'normal' gcode lines
+    bool need_flush = false;
     std::string cmd(line.cmd());
     double time = 0;
     int16_t fan_speed = -1;
@@ -245,7 +247,9 @@ void FanMover::_process_gcode_line(GCodeReader& reader, const GCodeReader::GCode
                 if (!m_is_custom_gcode) {
                     // if slow down => put in the queue. if not =>
                     if (m_back_buffer_fan_speed < fan_speed) {
-                        if (nb_seconds_delay > 0 && (!only_overhangs || current_role != ExtrusionRole::erOverhangPerimeter)) {
+                        std::cout << only_overhangs << " ? " << int(current_role) << "\n";
+                        if (nb_seconds_delay > 0 && (!only_overhangs || current_role == ExtrusionRole::erOverhangPerimeter)) {
+                            std::cout << "OK\n";
                             //don't put this command in the queue
                             time = -1;
                             // this M106 need to go in the past
@@ -339,6 +343,9 @@ void FanMover::_process_gcode_line(GCodeReader& reader, const GCodeReader::GCode
                     }
                     //update back buffer fan speed
                     m_back_buffer_fan_speed = fan_speed;
+                } else {
+                    // have to flush the buffer to avoid erasing a fan command.
+                    need_flush = true;
                 }
             }
             break;
@@ -352,8 +359,12 @@ void FanMover::_process_gcode_line(GCodeReader& reader, const GCodeReader::GCode
                 std::string extrusion_string = line.raw().substr(6, line.raw().size() - 6);
                 current_role = ExtrusionEntity::string_to_role(extrusion_string);
             }
-            if (line.raw().size() > 16 && line.raw().rfind("; custom gcode", 0) == 0) {
-                m_is_custom_gcode = line.raw().rfind("; custom gcode end", 0) != 0;
+            if (line.raw().size() > 16) {
+                if (line.raw().rfind("; custom gcode", 0) != std::string::npos)
+                    if (line.raw().rfind("; custom gcode end", 0) != std::string::npos)
+                        m_is_custom_gcode = false;
+                    else
+                        m_is_custom_gcode = true;
             }
         }
     }
@@ -412,7 +423,7 @@ void FanMover::_process_gcode_line(GCodeReader& reader, const GCodeReader::GCode
     // puts the line back into the gcode
     //if buffer too big, flush it.
     if (time >= 0) {
-        while (!m_buffer.empty() && m_buffer_time_size - m_buffer.front().time > nb_seconds_delay - EPSILON) {
+        while (!m_buffer.empty() && (need_flush || m_buffer_time_size - m_buffer.front().time > nb_seconds_delay - EPSILON) ){
             BufferData& frontdata = m_buffer.front();
             if (frontdata.fan_speed < 0 || frontdata.fan_speed != m_front_buffer_fan_speed || frontdata.is_kickstart) {
                 if (frontdata.is_kickstart && frontdata.fan_speed < m_front_buffer_fan_speed) {

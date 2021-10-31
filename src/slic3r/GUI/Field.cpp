@@ -206,8 +206,7 @@ wxString Field::get_tooltip_text(const wxString& default_string)
 
 	if (tooltip.length() > 0)
         tooltip_text = tooltip + "\n" + _(L("default value")) + "\t: " +
-        (boost::iends_with(opt_id, "_gcode") ? "\n" : "") + default_string +
-        (boost::iends_with(opt_id, "_gcode") ? "" : "\n") + 
+        (boost::iends_with(opt_id, "_gcode") ? "\n" : "") + default_string + "\n" +
         _(L("parameter name")) + "\t: " + opt_id;
 
 	return tooltip_text;
@@ -263,8 +262,9 @@ void Field::set_tooltip(const wxString& default_string, wxWindow* window) {
             wxWindowList tipWindow = this->getWindow()->GetChildren();
             if (tipWindow.size() > 0) {
                 wxWindow* tooltipWindow = tipWindow.GetLast()->GetData();
-                if (tooltipWindow && tooltipWindow == this->m_rich_tooltip_timer.m_current_rich_tooltip)
+                if (tooltipWindow && tooltipWindow == this->m_rich_tooltip_timer.m_current_rich_tooltip) {
                     tooltipWindow->Hide();// DismissAndNotify();
+                }
             }
             });
     }else
@@ -272,7 +272,8 @@ void Field::set_tooltip(const wxString& default_string, wxWindow* window) {
 }
 
 void RichTooltipTimer::Notify() {
-    if (wxGetActiveWindow() && this->m_is_rich_tooltip_ready && m_current_window) {
+    if (wxGetActiveWindow() && this->m_is_rich_tooltip_ready && m_current_window && !m_current_window->HasFocus()) {
+        this->m_previous_focus = wxGetActiveWindow()->FindFocus();
         this->m_current_rich_tooltip = nullptr;
         wxRichToolTip richTooltip(
             m_field->get_rich_tooltip_title(this->m_value),
@@ -281,6 +282,11 @@ void RichTooltipTimer::Notify() {
         richTooltip.ShowFor(m_current_window);
         wxWindowList tipWindow = m_current_window->GetChildren();
         this->m_current_rich_tooltip = tipWindow.GetLast()->GetData();
+        this->m_current_rich_tooltip->Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent& event) {
+                CallAfter([this]() {
+                    if (this->m_previous_focus) this->m_previous_focus->SetFocus(); 
+                });
+        });
     }
 }
 
@@ -405,15 +411,15 @@ void Field::get_value_by_opt_type(wxString& str, const bool check_value/* = true
                     show_error(m_parent, _(L("Input value is out of range")));
                     if (m_opt.min > val) val = m_opt.min;
                     set_value(double_to_string(val, m_opt.precision), true);
-                } else if (((m_opt.sidetext.rfind("mm/s") != std::string::npos && val > m_opt.max) ||
-                    (m_opt.sidetext.rfind("mm ") != std::string::npos && val > 1)) &&
+                } else if (
+                    (
+                        (m_opt.sidetext.rfind("mm/s") != std::string::npos && val > m_opt.max) 
+                        || 
+                        (m_opt.sidetext.rfind("mm ") != std::string::npos && val > m_opt.max_literal)
+                    ) 
+                    &&
                     (m_value.empty() || std::string(str.ToUTF8().data()) != boost::any_cast<std::string>(m_value)))
                 {
-                    // exceptions
-                    if (std::set<t_config_option_key>{"infill_anchor", "infill_anchor_max", "avoid_crossing_perimeters_max_detour"}.count(m_opt.opt_key) > 0) {
-                        m_value = std::string(str.ToUTF8().data());
-                        break;
-                    }
                     if (m_opt.opt_key.find("extrusion_width") != std::string::npos || m_opt.opt_key.find("extrusion_spacing") != std::string::npos) {
                         const DynamicPrintConfig& printer_config = wxGetApp().preset_bundle->printers.get_edited_preset().config;
                         const std::vector<double>& nozzle_diameters = printer_config.option<ConfigOptionFloats>("nozzle_diameter")->values;
